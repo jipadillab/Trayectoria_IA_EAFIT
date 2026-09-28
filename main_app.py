@@ -11,8 +11,10 @@ import io
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from groq import Groq
 
@@ -152,6 +154,75 @@ def grafico_palabras(tabla, titulo):
     st.plotly_chart(fig)
 
 
+# ---------- Apoyo para las gráficas del EDA ----------
+PALETA = px.colors.qualitative.Bold
+
+
+def mostrar(fig, clave, alto=None):
+    """Muestra una gráfica de Plotly con márgenes compactos."""
+    if alto:
+        fig.update_layout(height=alto)
+    fig.update_layout(margin=dict(t=55, b=30, l=30, r=20))
+    st.plotly_chart(fig, key=clave)
+
+
+def en_cuadricula(figuras, prefijo, columnas=2):
+    """Reparte varias gráficas en columnas."""
+    cols = st.columns(columnas)
+    for i, fig in enumerate(figuras):
+        with cols[i % columnas]:
+            mostrar(fig, f"{prefijo}_{i}", 330)
+
+
+def indice_de(lista, preferido):
+    return lista.index(preferido) if preferido in lista else 0
+
+
+def resumen_categoricas(df, cat):
+    filas = []
+    for c in cat:
+        vc = df[c].value_counts()
+        filas.append({
+            "columna": c,
+            "categorías": int(df[c].nunique()),
+            "más frecuente": str(vc.index[0]) if len(vc) else "",
+            "veces": int(vc.iloc[0]) if len(vc) else 0,
+            "% del total": round(vc.iloc[0] / len(df) * 100, 1) if len(vc) else 0.0,
+        })
+    return pd.DataFrame(filas)
+
+
+def resumen_atipicos(df, num):
+    """Valores atípicos (regla del rango intercuartil), sesgo y curtosis por variable numérica."""
+    filas = []
+    for c in num:
+        s = df[c].dropna()
+        if s.empty:
+            continue
+        q1, q3 = s.quantile(0.25), s.quantile(0.75)
+        iqr = q3 - q1
+        bajo, alto = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        n = int(((s < bajo) | (s > alto)).sum())
+        filas.append({
+            "variable": c, "atípicos": n, "% atípicos": round(n / len(s) * 100, 1),
+            "límite inferior": round(bajo, 2), "límite superior": round(alto, 2),
+            "sesgo": round(s.skew(), 2), "curtosis": round(s.kurt(), 2),
+        })
+    return pd.DataFrame(filas)
+
+
+def frecuencia_bigramas(serie, top=15):
+    """Pares de palabras que aparecen seguidas."""
+    conteo = {}
+    for texto in serie.dropna().astype(str):
+        palabras = [p for p in re.findall(r"[a-záéíóúñü]{3,}", texto.lower()) if p not in STOPWORDS]
+        for a, b in zip(palabras, palabras[1:]):
+            clave = f"{a} {b}"
+            conteo[clave] = conteo.get(clave, 0) + 1
+    ordenado = sorted(conteo.items(), key=lambda x: -x[1])[:top]
+    return pd.DataFrame(ordenado, columns=["frase", "frecuencia"])
+
+
 # ================================ Barra lateral =================================
 st.title("Taller de Analítica de Datos con IA")
 st.sidebar.header("🔑 Configuración de la IA")
@@ -248,70 +319,341 @@ with tab2:
         st.info("Primero carga tus datos en la pestaña 1.")
     else:
         tipos = clasificar_columnas(df)
-        num, cat = tipos["numericas"], tipos["categoricas"]
+        num, cat, textos_eda = tipos["numericas"], tipos["categoricas"], tipos["textos"]
+        cat_graf = [c for c in cat if df[c].nunique() <= 25]   # categorías graficables
 
-        # Resumen general
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Filas", df.shape[0])
-        c2.metric("Columnas", df.shape[1])
-        c3.metric("Filas duplicadas", int(df.duplicated().sum()))
-        c4.metric("Celdas vacías", int(df.isna().sum().sum()))
-
-        # Calidad de los datos
-        st.markdown("### Calidad de los datos")
-        calidad = pd.DataFrame(
-            {
-                "columna": df.columns,
-                "tipo detectado": [etiqueta_tipo(c, tipos) for c in df.columns],
-                "vacíos": df.isna().sum().values,
-                "% vacíos": (df.isna().mean() * 100).round(1).values,
-                "valores únicos": df.nunique().values,
-            }
+        e_res, e_num, e_cat, e_rel, e_txt, e_cal = st.tabs(
+            ["📋 Resumen", "🔢 Numéricas", "🏷️ Categóricas", "🔗 Relaciones", "💬 Texto", "🧹 Calidad"]
         )
-        st.dataframe(calidad)
-        for col in tipos["mixtas"]:
-            no_numerico = pd.to_numeric(df[col], errors="coerce").isna() & df[col].notna()
-            raros = df.loc[no_numerico, col].astype(str).unique().tolist()
-            st.warning(
-                f"⚠️ La columna **{col}** parece numérica pero tiene texto mezclado: {raros[:5]}. "
-                "Puedes corregirlo con la 'Limpieza rápida' de la pestaña 1."
-            )
-        hay_vacios = calidad[calidad["vacíos"] > 0]
-        if not hay_vacios.empty:
-            st.plotly_chart(px.bar(hay_vacios, x="columna", y="vacíos", title="Celdas vacías por columna"))
 
-        # Estadísticas descriptivas
-        if num:
-            st.markdown("### Estadísticas de las variables numéricas")
-            st.dataframe(df[num].describe().T.round(2))
+        # ============================ 📋 Resumen ============================
+        with e_res:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Filas", df.shape[0])
+            c2.metric("Columnas", df.shape[1])
+            c3.metric("Filas duplicadas", int(df.duplicated().sum()))
+            c4.metric("Celdas vacías", int(df.isna().sum().sum()))
 
-        # Distribución de una variable
-        st.markdown("### Distribución de una variable")
-        explorables = num + cat
-        if explorables:
-            variable = st.selectbox("Elige una variable", explorables, key="eda_variable")
-            if variable in num:
-                col_a, col_b = st.columns(2)
-                col_a.plotly_chart(px.histogram(df, x=variable, title=f"Histograma de {variable}"))
-                col_b.plotly_chart(px.box(df, y=variable, title=f"Diagrama de caja de {variable}"))
+            g1, g2 = st.columns(2)
+            with g1:
+                composicion = pd.Series([etiqueta_tipo(c, tipos) for c in df.columns]).value_counts().reset_index()
+                composicion.columns = ["tipo", "columnas"]
+                mostrar(px.pie(composicion, names="tipo", values="columnas", hole=0.5,
+                               title="Tipos de columnas", color_discrete_sequence=PALETA), "eda_tipos", 340)
+            with g2:
+                completo = ((1 - df.isna().mean()) * 100).round(1).reset_index()
+                completo.columns = ["columna", "% completo"]
+                mostrar(px.bar(completo.sort_values("% completo"), x="% completo", y="columna", orientation="h",
+                               range_x=[0, 100], title="% de datos completos por columna",
+                               color_discrete_sequence=["#2A9D8F"]), "eda_completo", 340)
+
+            if num:
+                st.markdown("### Estadísticas de las variables numéricas")
+                st.dataframe(df[num].describe().T.round(2))
+            if cat:
+                st.markdown("### Resumen de las variables categóricas")
+                st.dataframe(resumen_categoricas(df, cat))
+
+        # ============================ 🔢 Numéricas ============================
+        with e_num:
+            if not num:
+                st.info("No hay columnas numéricas en estos datos. Si hay números guardados como texto, "
+                        "usa la 'Limpieza rápida' de la pestaña 1.")
             else:
-                conteo = df[variable].value_counts(dropna=False).reset_index()
-                conteo.columns = [variable, "cantidad"]
-                orden = orden_de(variable, df[variable])
-                st.plotly_chart(
-                    px.bar(conteo, x=variable, y="cantidad", title=f"Frecuencia de {variable}",
-                           category_orders={variable: orden} if orden else None)
-                )
-        else:
-            st.caption("No hay variables numéricas ni categóricas para graficar.")
+                st.markdown("### Distribución de cada variable numérica")
+                figs = [
+                    px.histogram(df, x=c, marginal="box", nbins=20, title=c,
+                                 color_discrete_sequence=[PALETA[i % len(PALETA)]])
+                    for i, c in enumerate(num[:8])
+                ]
+                en_cuadricula(figs, "eda_hist")
+                if len(num) > 8:
+                    st.caption(f"Se muestran las primeras 8 de {len(num)} variables numéricas.")
 
-        # Correlaciones
-        if len(num) >= 2:
-            st.markdown("### Correlaciones entre variables numéricas")
-            corr = df[num].corr().round(2)
-            st.plotly_chart(
-                px.imshow(corr, text_auto=True, zmin=-1, zmax=1, color_continuous_scale="RdBu_r", aspect="auto")
+                st.markdown("### Explora una variable en detalle")
+                v = st.selectbox("Variable", num, index=indice_de(num, "nota_final"), key="eda_num_var")
+                bins = st.slider("Número de barras del histograma", 5, 60, 20, key="eda_bins")
+                serie = df[v].dropna()
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Promedio", f"{serie.mean():.2f}")
+                m2.metric("Mediana", f"{serie.median():.2f}")
+                m3.metric("Desviación", f"{serie.std():.2f}")
+                m4.metric("Sesgo", f"{serie.skew():.2f}")
+                m5.metric("Curtosis", f"{serie.kurt():.2f}")
+                a, b = st.columns(2)
+                with a:
+                    mostrar(px.histogram(df, x=v, nbins=bins, marginal="violin", histnorm="probability density",
+                                         title=f"Densidad de {v}", color_discrete_sequence=["#264653"]),
+                            "eda_detalle_hist", 380)
+                with b:
+                    mostrar(px.ecdf(df, x=v, title=f"Distribución acumulada (ECDF) de {v}",
+                                    color_discrete_sequence=["#E76F51"]), "eda_detalle_ecdf", 380)
+
+                st.markdown("### Comparación entre variables numéricas")
+                atipicos = resumen_atipicos(df, num)
+                z = (df[num] - df[num].mean()) / df[num].std(ddof=0).replace(0, float("nan"))
+                z = z.melt(var_name="variable", value_name="valor estandarizado")
+                k1, k2 = st.columns(2)
+                with k1:
+                    mostrar(px.box(z, x="variable", y="valor estandarizado", color="variable", points="outliers",
+                                   title="Cajas comparadas (valores estandarizados)",
+                                   color_discrete_sequence=PALETA).update_layout(showlegend=False),
+                            "eda_cajas_z", 380)
+                with k2:
+                    mostrar(px.bar(atipicos, x="variable", y="% atípicos", text="atípicos", color="variable",
+                                   title="Valores atípicos por variable (regla del rango intercuartil)",
+                                   color_discrete_sequence=PALETA).update_layout(showlegend=False),
+                            "eda_atipicos", 380)
+                k3, k4 = st.columns(2)
+                with k3:
+                    mostrar(px.bar(atipicos, x="variable", y="sesgo", color="sesgo",
+                                   color_continuous_scale="RdBu_r", range_color=[-2, 2],
+                                   title="Sesgo de cada variable (0 = simétrica)"), "eda_sesgo", 340)
+                with k4:
+                    medias = df[num].mean().reset_index()
+                    medias.columns = ["variable", "promedio"]
+                    mostrar(px.bar(medias, x="variable", y="promedio", text_auto=".2f", color="variable",
+                                   title="Promedio de cada variable",
+                                   color_discrete_sequence=PALETA).update_layout(showlegend=False),
+                            "eda_medias", 340)
+                st.dataframe(atipicos)
+
+        # ============================ 🏷️ Categóricas ============================
+        with e_cat:
+            if not cat_graf:
+                st.info("No hay variables categóricas graficables en estos datos.")
+            else:
+                st.markdown("### Frecuencia de cada variable categórica")
+                figs = []
+                for c in cat_graf[:6]:
+                    conteo = df[c].value_counts().reset_index()
+                    conteo.columns = [c, "cantidad"]
+                    fig = px.bar(conteo, x=c, y="cantidad", text="cantidad", color=c, title=c,
+                                 color_discrete_sequence=PALETA, category_orders={c: orden_de(c, df[c])})
+                    figs.append(fig.update_layout(showlegend=False))
+                en_cuadricula(figs, "eda_cat")
+
+                st.markdown("### Proporciones de una variable")
+                cv = st.selectbox("Variable categórica", cat_graf, key="eda_cat_var")
+                conteo = df[cv].value_counts().reset_index()
+                conteo.columns = [cv, "cantidad"]
+                d1, d2 = st.columns(2)
+                with d1:
+                    mostrar(px.pie(conteo, names=cv, values="cantidad", hole=0.45,
+                                   title=f"Proporción de {cv}", color_discrete_sequence=PALETA), "eda_pie", 360)
+                with d2:
+                    mostrar(px.treemap(conteo, path=[cv], values="cantidad",
+                                       title=f"Mapa de árbol de {cv}", color_discrete_sequence=PALETA),
+                            "eda_treemap", 360)
+
+                if len(cat_graf) >= 2:
+                    st.markdown("### Relación entre dos categorías")
+                    f1, f2 = st.columns(2)
+                    ca = f1.selectbox("Primera categoría", cat_graf, index=0, key="eda_cat_a")
+                    cb = f2.selectbox("Segunda categoría", cat_graf, index=1, key="eda_cat_b")
+                    if ca != cb:
+                        cruce = pd.crosstab(df[ca], df[cb])
+                        cruce = cruce.reindex(index=orden_de(ca, df[ca]), columns=orden_de(cb, df[cb]))
+                        h1, h2 = st.columns(2)
+                        with h1:
+                            mostrar(px.imshow(cruce, text_auto=True, color_continuous_scale="Blues", aspect="auto",
+                                              title=f"Conteo: {ca} × {cb}"), "eda_cruce_conteo", 380)
+                        with h2:
+                            mostrar(px.histogram(df, x=ca, color=cb, barnorm="percent", text_auto=".0f",
+                                                 title=f"Composición de {cb} dentro de cada {ca} (%)",
+                                                 color_discrete_sequence=PALETA,
+                                                 category_orders={ca: orden_de(ca, df[ca]), cb: orden_de(cb, df[cb])}),
+                                    "eda_cruce_compo", 380)
+                        pares = df.groupby([ca, cb]).size().reset_index(name="cantidad")
+                        mostrar(px.sunburst(pares, path=[ca, cb], values="cantidad",
+                                            title=f"Sunburst: {ca} → {cb}", color_discrete_sequence=PALETA),
+                                "eda_sunburst", 420)
+                    else:
+                        st.caption("Elige dos categorías distintas.")
+
+                    st.markdown("### Flujo entre categorías (categorías paralelas)")
+                    dims = cat_graf[:4]
+                    color_par = num[indice_de(num, "nota_final")] if num else None
+                    fig_par = px.parallel_categories(df, dimensions=dims, color=color_par,
+                                                     color_continuous_scale="Viridis",
+                                                     title="Cada línea es un grupo de filas; el color indica el promedio" if color_par else None)
+                    mostrar(fig_par, "eda_paralelas", 420)
+
+        # ============================ 🔗 Relaciones ============================
+        with e_rel:
+            if len(num) >= 2:
+                metodo = st.radio(
+                    "Tipo de correlación", ["pearson", "spearman"], horizontal=True, key="eda_metodo",
+                    format_func=lambda m: "Pearson (lineal)" if m == "pearson" else "Spearman (por rangos)",
+                )
+                corr = df[num].corr(method=metodo).round(2)
+                pares_corr = pd.DataFrame(
+                    [(f"{a} × {b}", corr.loc[a, b]) for i, a in enumerate(num) for b in num[i + 1:]],
+                    columns=["par de variables", "correlación"],
+                )
+                pares_corr["fuerza"] = pares_corr["correlación"].abs()
+                top = pares_corr.sort_values("fuerza", ascending=False).head(10).sort_values("fuerza")
+                r1, r2 = st.columns(2)
+                with r1:
+                    mostrar(px.imshow(corr, text_auto=True, zmin=-1, zmax=1, color_continuous_scale="RdBu_r",
+                                      aspect="auto", title="Mapa de calor de correlaciones"), "eda_corr_mapa", 420)
+                with r2:
+                    mostrar(px.bar(top, x="correlación", y="par de variables", orientation="h", color="correlación",
+                                   color_continuous_scale="RdBu_r", range_color=[-1, 1],
+                                   title="Pares de variables más relacionados"), "eda_corr_top", 420)
+
+                st.markdown("### Matriz de dispersión")
+                colorear = st.selectbox("Colorear puntos por", ["(ninguno)"] + cat_graf, key="eda_matriz_color")
+                fig_m = px.scatter_matrix(df, dimensions=num[:5], color=None if colorear == "(ninguno)" else colorear,
+                                          color_discrete_sequence=PALETA, height=620)
+                fig_m.update_traces(diagonal_visible=False, showupperhalf=False,
+                                    marker=dict(size=4, opacity=0.7))
+                mostrar(fig_m, "eda_matriz", 620)
+
+                st.markdown("### Dos variables frente a frente")
+                s1, s2, s3 = st.columns(3)
+                x = s1.selectbox("Eje X", num, index=0, key="eda_x")
+                y = s2.selectbox("Eje Y", num, index=1, key="eda_y")
+                col_sc = s3.selectbox("Color", ["(ninguno)"] + cat_graf, key="eda_color_sc")
+                fig_sc = px.scatter(df, x=x, y=y, color=None if col_sc == "(ninguno)" else col_sc,
+                                    marginal_x="histogram", marginal_y="box", opacity=0.75,
+                                    color_discrete_sequence=PALETA, title=f"{y} según {x}")
+                datos_xy = df[[x, y]].dropna()
+                if x != y and len(datos_xy) > 2 and datos_xy[x].nunique() > 1:
+                    pendiente, intercepto = np.polyfit(datos_xy[x], datos_xy[y], 1)
+                    xs = np.array([datos_xy[x].min(), datos_xy[x].max()])
+                    fig_sc.add_trace(go.Scatter(x=xs, y=pendiente * xs + intercepto, mode="lines",
+                                                name="Tendencia lineal", line=dict(color="black", dash="dash")),
+                                     row=1, col=1)
+                    st.caption(f"Correlación entre {x} y {y}: {datos_xy[x].corr(datos_xy[y]):.2f} · "
+                               f"por cada unidad de {x}, {y} cambia en promedio {pendiente:.2f}.")
+                mostrar(fig_sc, "eda_scatter", 480)
+            else:
+                st.info("Necesitas al menos 2 variables numéricas para ver correlaciones y dispersión.")
+
+            if num and cat_graf:
+                st.markdown("### Una variable numérica según una categoría")
+                n1, n2 = st.columns(2)
+                vn = n1.selectbox("Variable numérica", num, index=indice_de(num, "nota_final"), key="eda_vn")
+                vc = n2.selectbox("Categoría", cat_graf, key="eda_vc")
+                orden = {vc: orden_de(vc, df[vc])}
+                p1, p2 = st.columns(2)
+                with p1:
+                    mostrar(px.violin(df, x=vc, y=vn, color=vc, box=True, points="all", category_orders=orden,
+                                      color_discrete_sequence=PALETA, title=f"{vn} por {vc} (violín)"
+                                      ).update_layout(showlegend=False), "eda_violin", 400)
+                with p2:
+                    resumen_g = df.groupby(vc)[vn].agg(promedio="mean", desviacion="std").reset_index()
+                    mostrar(px.bar(resumen_g, x=vc, y="promedio", error_y="desviacion", color=vc,
+                                   category_orders=orden, color_discrete_sequence=PALETA,
+                                   title=f"Promedio de {vn} por {vc} (± desviación)"
+                                   ).update_layout(showlegend=False), "eda_media_error", 400)
+                mostrar(px.histogram(df, x=vn, color=vc, barmode="overlay", opacity=0.6, marginal="box",
+                                     category_orders=orden, color_discrete_sequence=PALETA,
+                                     title=f"Distribuciones de {vn} superpuestas por {vc}"), "eda_overlay", 420)
+
+            if len(num) >= 3:
+                with st.expander("Ver coordenadas paralelas (todas las numéricas a la vez)"):
+                    color_p = st.selectbox("Colorear por", num, index=indice_de(num, "nota_final"), key="eda_par_color")
+                    mostrar(px.parallel_coordinates(df[num].dropna(), dimensions=num, color=color_p,
+                                                    color_continuous_scale="Viridis"), "eda_coord_par", 420)
+
+        # ============================ 💬 Texto ============================
+        with e_txt:
+            if not textos_eda:
+                st.info("No detecté columnas de texto libre (por ejemplo, comentarios). "
+                        "Usa basico.csv, experto.csv o maestro.csv para esta sección.")
+            else:
+                ct = st.selectbox("Columna de texto", textos_eda, key="eda_txt_col")
+                txt = df[ct].fillna("").astype(str)
+                largo_car, largo_pal = txt.str.len(), txt.str.split().str.len()
+                t1, t2, t3 = st.columns(3)
+                t1.metric("Textos", int((txt != "").sum()))
+                t2.metric("Textos distintos", int(txt.nunique()))
+                t3.metric("Palabras por texto (promedio)", f"{largo_pal.mean():.1f}")
+
+                a, b = st.columns(2)
+                with a:
+                    mostrar(px.histogram(largo_car, nbins=20, title="Longitud en caracteres",
+                                         labels={"value": "caracteres"},
+                                         color_discrete_sequence=["#2A9D8F"]).update_layout(showlegend=False),
+                            "eda_txt_car", 340)
+                with b:
+                    mostrar(px.histogram(largo_pal, nbins=15, title="Cantidad de palabras",
+                                         labels={"value": "palabras"},
+                                         color_discrete_sequence=["#E9C46A"]).update_layout(showlegend=False),
+                            "eda_txt_pal", 340)
+
+                st.markdown("### Palabras y frases más frecuentes")
+                w1, w2 = st.columns(2)
+                with w1:
+                    tabla_p = frecuencia_palabras(df[ct], top=15)
+                    if not tabla_p.empty:
+                        mostrar(px.bar(tabla_p.sort_values("frecuencia"), x="frecuencia", y="palabra",
+                                       orientation="h", title="Top 15 palabras",
+                                       color_discrete_sequence=["#264653"]), "eda_txt_palabras", 440)
+                with w2:
+                    tabla_b = frecuencia_bigramas(df[ct], top=15)
+                    if not tabla_b.empty:
+                        mostrar(px.bar(tabla_b.sort_values("frecuencia"), x="frecuencia", y="frase",
+                                       orientation="h", title="Top 15 pares de palabras seguidas",
+                                       color_discrete_sequence=["#E76F51"]), "eda_txt_bigramas", 440)
+
+                st.markdown("### Textos más repetidos")
+                repetidos = df[ct].value_counts().head(10).reset_index()
+                repetidos.columns = ["texto", "veces"]
+                repetidos["texto"] = repetidos["texto"].apply(lambda t: t if len(t) <= 60 else t[:60] + "…")
+                mostrar(px.bar(repetidos.sort_values("veces"), x="veces", y="texto", orientation="h",
+                               title="Los 10 textos que más se repiten", color_discrete_sequence=["#8AB17D"]),
+                        "eda_txt_repetidos", 420)
+
+                if num:
+                    st.markdown("### ¿La longitud del texto se relaciona con una variable numérica?")
+                    vt = st.selectbox("Variable numérica", num, index=indice_de(num, "nota_final"), key="eda_txt_num")
+                    datos_t = pd.DataFrame({"palabras": largo_pal, vt: df[vt]})
+                    mostrar(px.scatter(datos_t, x="palabras", y=vt, opacity=0.7,
+                                       title=f"{vt} según la cantidad de palabras del texto",
+                                       color_discrete_sequence=["#6A4C93"]), "eda_txt_scatter", 380)
+
+        # ============================ 🧹 Calidad ============================
+        with e_cal:
+            calidad = pd.DataFrame(
+                {
+                    "columna": df.columns,
+                    "tipo detectado": [etiqueta_tipo(c, tipos) for c in df.columns],
+                    "vacíos": df.isna().sum().values,
+                    "% vacíos": (df.isna().mean() * 100).round(1).values,
+                    "valores únicos": df.nunique().values,
+                }
             )
+            st.dataframe(calidad)
+            for col in tipos["mixtas"]:
+                no_numerico = pd.to_numeric(df[col], errors="coerce").isna() & df[col].notna()
+                raros = df.loc[no_numerico, col].astype(str).unique().tolist()
+                st.warning(
+                    f"⚠️ La columna **{col}** parece numérica pero tiene texto mezclado: {raros[:5]}. "
+                    "Puedes corregirlo con la 'Limpieza rápida' de la pestaña 1."
+                )
+            constantes = [c for c in df.columns if df[c].nunique(dropna=False) <= 1]
+            if constantes:
+                st.warning(f"Columnas con un solo valor (no aportan información): {constantes}")
+            if int(df.duplicated().sum()) > 0:
+                st.warning(f"Hay {int(df.duplicated().sum())} filas duplicadas.")
+
+            hay_vacios = calidad[calidad["vacíos"] > 0]
+            if hay_vacios.empty:
+                st.success("No hay celdas vacías en estos datos ✅")
+            else:
+                q1, q2 = st.columns(2)
+                with q1:
+                    mostrar(px.bar(hay_vacios, x="columna", y="vacíos", text="vacíos",
+                                   title="Celdas vacías por columna", color_discrete_sequence=["#D62728"]),
+                            "eda_vacios_barra", 380)
+                with q2:
+                    mostrar(px.imshow(df.head(300).isna().astype(int).T, aspect="auto",
+                                      color_continuous_scale=[[0, "#EEEEEE"], [1, "#D62728"]],
+                                      title="Mapa de celdas vacías (rojo = vacío)"
+                                      ).update_coloraxes(showscale=False), "eda_vacios_mapa", 380)
 
 # ----------------------- 3 · Análisis cuantitativo y cualitativo ------------------------
 resumen_analisis = ""
