@@ -10,7 +10,7 @@ Repositorio de apoyo para la clase **"IA para analítica de datos"** del Diploma
 
 | Archivo | Descripción |
 |---|---|
-| `main_app.py` | Código base de la app en Streamlit. Incluye los puntos `# CRUCE-INTEGRADOR` y `# PIPELINE-EXPERTO` donde cada ruta agrega su propio código. |
+| `main_app.py` | App en Streamlit con 4 pestañas: **1 · Carga de datos**, **2 · EDA estándar** (con muchas gráficas), **3 · Análisis de datos** (cuantitativo y cualitativo) y **4 · Análisis con IA**. Tiene un menú izquierdo (API Key, modelo, parámetros) y un bloque `# EXTENSIÓN` en la pestaña 3 donde las rutas Integrador y Experto agregan su propio código. |
 | `requirements.txt` | Librerías necesarias para el despliegue (`streamlit`, `pandas`, `groq`, `plotly`, `numpy`). |
 | `maestro.csv` | Dataset completo — 200 estudiantes, base de la que se derivan las tres vistas por nivel. |
 | `basico.csv` | Vista recortada para la ruta Explorador (id, nota final, comentario). |
@@ -37,12 +37,9 @@ Elige una de las dos rutas para tener tu propia copia editable:
 
 1. Entra a [share.streamlit.io](https://share.streamlit.io) con tu cuenta de GitHub.
 2. **Create app** → elige tu repositorio (el fork o el que creaste) → *Main file path*: `main_app.py` → **Deploy**.
-3. En `Settings → Secrets` de tu app, agrega:
-   ```
-   GROQ_API_KEY = "tu-llave-aquí"
-   ```
-   (genera tu llave gratuita en [console.groq.com](https://console.groq.com))
-4. Sube uno de los CSV y da clic en "Analizar con IA" para confirmar que todo funciona.
+3. Cuando la app abra, pega tu API Key de Groq en el **menú de la izquierda** (campo "Pega aquí tu API Key de Groq"). Genera tu llave gratuita en [console.groq.com](https://console.groq.com). Debe aparecer "Llave detectada ✅".
+   - *Alternativa:* si prefieres no pegarla cada vez, guárdala en `Settings → Secrets` como `GROQ_API_KEY = "tu-llave-aquí"` y la app la usará automáticamente.
+4. En la pestaña **1 · Carga de datos** elige uno de los CSV (o súbelo) y recorre las pestañas en orden: primero 2 (EDA), luego 3 (análisis) y al final 4 (IA).
 
 ## 📘 Guía interactiva del taller
 
@@ -52,7 +49,7 @@ La guía paso a paso (con las 3 misiones, el diagrama de flujo, autoevaluación 
 
 ## 🧠 Sobre el modelo de IA
 
-El código usa la API de [Groq](https://console.groq.com/docs) con el modelo `llama-3.3-70b-versatile`. Los modelos disponibles cambian con el tiempo — si el despliegue falla por un modelo no encontrado, revisa la consola de Groq y actualiza el nombre en `main_app.py`.
+La app usa la API de [Groq](https://console.groq.com/docs) con modelos GPT-OSS de OpenAI (`openai/gpt-oss-20b` por defecto y `openai/gpt-oss-120b`). Desde el menú izquierdo puedes cambiar el modelo, ajustar la creatividad (`temperature`) y limitar cuántas filas se envían a la IA (útil si aparece un error de límite de tokens). Los modelos disponibles cambian con el tiempo: si alguno deja de funcionar, escribe el ID de otro modelo en el campo "¿Otro modelo?" sin necesidad de editar el código.
 
 ## ✍️ Autor
 
