@@ -45,7 +45,7 @@ Elige una de las dos rutas para tener tu propia copia editable:
 
 La guía paso a paso (con las 3 misiones, el diagrama de flujo, autoevaluación y material de apoyo) vive en:
 
-🔗 *[agrega aquí el link de tu guía publicada, por ejemplo en Netlify]*
+🔗 *https://trayectoria-ia-eafit.netlify.app/*
 
 ## 🧠 Sobre el modelo de IA
 
